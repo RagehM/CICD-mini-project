@@ -1,21 +1,35 @@
+from contextlib import asynccontextmanager
 from fastapi import FastAPI, Depends, HTTPException
 from sqlalchemy.orm import Session
-import models
-from database import SessionLocal, engine
-from schemas import StudentCreate, Student
+from app import models
+from app.database import SessionLocal, engine
+from app.schemas import StudentCreate, Student
+from typing import List
 import os
 import redis.asyncio as redis
 from fastapi_cache import FastAPICache
 from fastapi_cache.backends.redis import RedisBackend
 from fastapi_cache.decorator import cache
-from typing import List
 
+# Create global variable for Redis client
+redis_client = None
 
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    # Startup
+    global redis_client
+    models.Base.metadata.create_all(bind=engine)
+    redis_url = os.getenv("REDIS_URL", "redis://localhost:6379")
+    redis_client = redis.from_url(redis_url, decode_responses=True)
+    FastAPICache.init(RedisBackend(redis_client), prefix="fastapi-cache")
+    
+    yield
+    
+    # Shutdown
+    if redis_client:
+        await redis_client.aclose()
 
-models.Base.metadata.create_all(bind=engine)
-
-app = FastAPI()
-
+app = FastAPI(lifespan=lifespan)
 
 def get_db():
     db = SessionLocal()
@@ -23,13 +37,6 @@ def get_db():
         yield db
     finally:
         db.close()
-
-@app.on_event("startup")
-async def startup():
-    models.Base.metadata.create_all(bind=engine)
-    redis_url = os.getenv("REDIS_URL", "redis://localhost:6379")
-    redis_client = redis.from_url(redis_url, decode_responses=True)
-    FastAPICache.init(RedisBackend(redis_client), prefix="fastapi-cache")
 
 # Routes
 
